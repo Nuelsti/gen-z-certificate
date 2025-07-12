@@ -8,37 +8,18 @@ import jsPDF from 'jspdf'
 import WaterMark from '../../assets/GZ logo 00.png';
 import './style.css';
 
+// Import Firebase functions
+import {
+  saveCertificate,
+  getCertificatesByEmail,
+  getCertificateById,
+  clearAllCertificates
+} from '../Firebase/certificateService.js';
+
 // Format date to readable string
 const formatDate = (date) => {
   const options = { year: 'numeric', month: 'long', day: 'numeric' };
   return new Date(date).toLocaleDateString(undefined, options);
-};
-
-// Generate unique ID for certificates
-const generateId = () => {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
-};
-
-// Local storage helpers
-const STORAGE_KEY = 'certificates';
-
-const saveCertificates = (certificates) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(certificates));
-};
-
-const loadCertificates = () => {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  return stored ? JSON.parse(stored) : [];
-};
-
-const getCertificatesByEmail = (email) => {
-  const certificates = loadCertificates();
-  return certificates.filter(cert => cert.email.toLowerCase() === email.toLowerCase());
-};
-
-const getCertificateById = (id) => {
-  const certificates = loadCertificates();
-  return certificates.find(cert => cert.id === id);
 };
 
 export default function CertificateGenerator() {
@@ -72,14 +53,16 @@ export default function CertificateGenerator() {
   }, []);
 
   // Handle certificate verification
-  const handleVerification = (certId) => {
+  const handleVerification = async (certId) => {
+    setLoading(true);
+    setError('');
+    
     try {
-      const certificate = getCertificateById(certId);
+      const certificate = await getCertificateById(certId);
       if (certificate && !certificate.isRevoked) {
         setCurrentCertificate(certificate);
         setShowVerification(true);
         setShowPreview(false);
-        setError('');
       } else {
         setError("This certificate has been revoked or is invalid");
         setShowVerification(false);
@@ -87,18 +70,23 @@ export default function CertificateGenerator() {
     } catch (err) {
       setError('Failed to verify certificate: ' + err.message);
       setShowVerification(false);
+    } finally {
+      setLoading(false);
     }
   };
 
   // Load certificates by email
-  const loadCertificatesByEmail = (email) => {
-    if (!email.trim()) return;
+  const loadCertificatesByEmail = async (email) => {
+    if (!email.trim()) {
+      setError('Please enter an email address');
+      return;
+    }
     
     setLoading(true);
     setError('');
     
     try {
-      const certificates = getCertificatesByEmail(email);
+      const certificates = await getCertificatesByEmail(email);
       setGeneratedCertificates(certificates);
       
       if (certificates.length === 0) {
@@ -122,7 +110,7 @@ export default function CertificateGenerator() {
   };
 
   // Generate certificate
-  const generateCertificate = (e) => {
+  const generateCertificate = async (e) => {
     if (e) e.preventDefault();
     
     if (!certificateData.email.trim()) {
@@ -130,13 +118,13 @@ export default function CertificateGenerator() {
       return;
     }
     
-    // if (!certificateData.recipientName.trim()) {
-    //   setError('Recipient name is required');
-    //   return;
-    // }
-    
     if (!certificateData.courseName.trim()) {
       setError('Course/Achievement name is required');
+      return;
+    }
+    
+    if (!certificateData.recipientName.trim()) {
+      setError('Recipient name is required');
       return;
     }
     
@@ -144,21 +132,25 @@ export default function CertificateGenerator() {
     setError('');
     
     try {
-      const newCertificate = {
+      // Save certificate to Firebase
+      const newCertificate = await saveCertificate({
         ...certificateData,
-        id: generateId(),
-        createdAt: new Date().toISOString(),
-        isRevoked: false
-      };
-      
-      // Save to local storage
-      const allCertificates = loadCertificates();
-      allCertificates.push(newCertificate);
-      saveCertificates(allCertificates);
+        email: certificateData.email.toLowerCase() // Normalize email
+      });
       
       setGeneratedCertificates([...generatedCertificates, newCertificate]);
       setCurrentCertificate(newCertificate);
       setShowPreview(true);
+      
+      // Clear form after successful generation
+      setCertificateData({
+        recipientName: '',
+        courseName: '',
+        issueDate: new Date().toISOString().split('T')[0],
+        instructorName: '',
+        organization: '',
+        email: ''
+      });
     } catch (err) {
       setError('Failed to create certificate: ' + err.message);
     } finally {
@@ -167,21 +159,7 @@ export default function CertificateGenerator() {
   };
 
   // Download certificate as image
-  // const downloadCertificate = () => {
-    // Create a canvas element to render the certificate
-    // const certificateElement = certificateRef.current;
-    
-    // if (!certificateElement) {
-      // setError('Certificate element not found');
-      // return;
-    // }
-    
-    // For now, show an alert. In a real implementation, you would use html2canvas
-    // alert("To implement actual download, you would need to install html2canvas library and use it to convert the certificate to an image");
-  // };
-  // const downloadCertificate = () => {
-  // const downloadCertificate = async () => {
-     const downloadAsImage = async () => {
+  const downloadAsImage = async () => {
     setLoading(true);
     
     try {
@@ -208,12 +186,13 @@ export default function CertificateGenerator() {
       
     } catch (error) {
       console.error('Error generating image:', error);
-      alert('Error generating image. Please try again.');
+      setError('Error generating image. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Download certificate as PDF
   const downloadAsPDF = async () => {
     setLoading(true);
     
@@ -254,11 +233,11 @@ export default function CertificateGenerator() {
       
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Error generating PDF. Please try again.');
+      setError('Error generating PDF. Please try again.');
     } finally {
       setLoading(false);
     }
-  }
+  };
 
   // Generate verification URL
   const getVerificationUrl = (id) => {
@@ -266,10 +245,11 @@ export default function CertificateGenerator() {
   };
 
   // View a previously generated certificate
-  const viewCertificate = (certificate) => {
+  const viewCertificate = async (certificate) => {
     try {
-      // Check if certificate exists and is valid
-      const storedCertificate = getCertificateById(certificate.id);
+      setLoading(true);
+      // Verify certificate still exists and is valid
+      const storedCertificate = await getCertificateById(certificate.id);
       if (storedCertificate && !storedCertificate.isRevoked) {
         setCurrentCertificate(storedCertificate);
         setShowPreview(true);
@@ -279,6 +259,8 @@ export default function CertificateGenerator() {
       }
     } catch (err) {
       setError('Failed to verify certificate: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -300,15 +282,6 @@ export default function CertificateGenerator() {
     });
   };
 
-  // Go back to main page from verification
-  // const goBackToMain = () => {
-  //   setShowVerification(false);
-  //   setShowPreview(false);
-  //   setCurrentCertificate(null);
-  //   setError('');
-  //   window.history.pushState({}, '', '/');
-  // };
-
   // Manual verification by ID
   const verifyById = () => {
     if (!verificationId.trim()) {
@@ -318,19 +291,25 @@ export default function CertificateGenerator() {
     handleVerification(verificationId);
   };
 
-  // Clear all certificates (for testing)
-  const clearAllCertificates = () => {
+  // Clear all certificates (for testing) - Firebase version
+  const clearAllCertificatesHandler = async () => {
     if (window.confirm('Are you sure you want to delete all certificates? This action cannot be undone.')) {
-      localStorage.removeItem(STORAGE_KEY);
-      setGeneratedCertificates([]);
-      setError('');
+      setLoading(true);
+      try {
+        await clearAllCertificates();
+        setGeneratedCertificates([]);
+        setError('');
+        alert('All certificates have been deleted successfully.');
+      } catch (err) {
+        setError('Failed to clear certificates: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
   return (
     <div className="app-container">
-
-    
       <div className="main-content">
         {/* Verification Page */}
         {showVerification ? (
@@ -361,7 +340,7 @@ export default function CertificateGenerator() {
                   <div>
                     <p className="detail-label">Achievement</p>
                     <p className="detail-value">Volunteering Certificate of Participation</p>
-                    {certificateData.courseName && (
+                    {currentCertificate.courseName && (
                       <p className="detail-value">{currentCertificate.courseName}</p>
                     )}
                   </div>
@@ -386,9 +365,6 @@ export default function CertificateGenerator() {
                 <div className="instructor-info">
                   <p className="detail-label">Issued by</p>
                   <p className="detail-value">GENERATION-Z YOUTH CAREER DEVELOPMENT FOUNDATION</p>
-                  {/* {currentCertificate.organization && (
-                    <p className="organization-name">{currentCertificate.organization}</p>
-                  )} */}
                 </div>
               )}
             </div>
@@ -398,20 +374,20 @@ export default function CertificateGenerator() {
               <p className="badge-id">Certificate ID: {currentCertificate.id}</p>
             </div>
 
-            {/* <div className="verification-actions">
-              <button onClick={goBackToMain} className="btn btn-primary">
+            <div className="verification-actions">
+              <button onClick={createNew} className="btn btn-primary">
                 Back to Main Page
               </button>
               <button onClick={() => setShowPreview(true)} className="btn btn-secondary">
                 View Certificate
               </button>
-            </div> */}
+            </div>
           </div>
         ) : (
           <>
             <header className="header">
               <h1 className="main-title">Certificate Generator</h1>
-              <p className="subtitle">Create and manage certificates locally</p>
+              <p className="subtitle">Create and manage certificates with Firebase</p>
             </header>
 
             {error && <div className="error-message">{error}</div>}
@@ -429,7 +405,7 @@ export default function CertificateGenerator() {
                       onChange={(e) => setVerificationId(e.target.value)}
                       className="input-field"
                     />
-                    <button onClick={verifyById} className="btn btn-verify">
+                    <button onClick={verifyById} className="btn btn-verify" disabled={loading}>
                       <Shield size={16} /> Verify
                     </button>
                   </div>
@@ -445,7 +421,7 @@ export default function CertificateGenerator() {
                       onChange={(e) => setSearchEmail(e.target.value)}
                       className="input-field"
                     />
-                    <button onClick={() => loadCertificatesByEmail(searchEmail)} className="btn btn-search">
+                    <button onClick={() => loadCertificatesByEmail(searchEmail)} className="btn btn-search" disabled={loading}>
                       <Search size={16} /> Search
                     </button>
                   </div>
@@ -500,35 +476,13 @@ export default function CertificateGenerator() {
                         className="input-field"
                       />
                     </div>
-
-                    {/* <div className="form-field">
-                      <label className="field-label">Instructor/Issuer Name</label>
-                      <input
-                        type="text"
-                        name="instructorName"
-                        value={certificateData.instructorName}
-                        onChange={handleInputChange}
-                        className="input-field"
-                      />
-                    </div> */}
-
-                    {/* <div className="form-field">
-                      <label className="field-label">Organization</label>
-                      <input
-                        type="text"
-                        name="organization"
-                        value={certificateData.organization}
-                        onChange={handleInputChange}
-                        className="input-field"
-                      />
-                    </div> */}
                   </div>
 
                   <div className="form-actions">
                     <button onClick={generateCertificate} className="btn btn-generate" disabled={loading}>
-                      Generate Certificate
+                      {loading ? 'Generating...' : 'Generate Certificate'}
                     </button>
-                    <button onClick={clearAllCertificates} className="btn btn-danger">
+                    <button onClick={clearAllCertificatesHandler} className="btn btn-danger" disabled={loading}>
                       Clear All Certificates
                     </button>
                   </div>
@@ -556,25 +510,20 @@ export default function CertificateGenerator() {
             ) : (
               <div className="preview-container">
                 <div ref={certificateRef} className="certificate">
-                    <img src={WaterMark} alt="Watermark" className="watermark" />
+                  <img src={WaterMark} alt="Watermark" className="watermark" />
                   <div className="certificate-header">
-                    {/* <h2 className="organization-name">
-                      {currentCertificate.organization || 'Professional Development Institute'}
-                    </h2> */}
                     <div className="certificate-type">GENERATION-Z YOUTH CAREER DEVELOPMENT FOUNDATION</div>
-                   
                   </div>
                   
                   <div className="certificate-body">
-                    {/* <p className="certificate-intro">This is to certify that</p> */}
                     <h2 className="recipient-name">{currentCertificate.recipientName}</h2>
-                     <div className="certificate-divider"></div>
+                    <div className="certificate-divider"></div>
                     <p className="achievement-intro">Volunteering Certificate of Participation in</p>
                     <h3 className="course-name">{currentCertificate.courseName}</h3>
                     <p className="issue-date">
-                       <img src={Sign} alt="Signature" className="signature-image" />
+                      <img src={Sign} alt="Signature" className="signature-image" />
                       <div className="signature-line"></div>
-                       <p className="instructor-title">CHAIRMAN/TRUSTEES</p>
+                      <p className="instructor-title">CHAIRMAN/TRUSTEES</p>
                     </p>
                     
                     <div className="certificate-footer">                      
@@ -593,12 +542,10 @@ export default function CertificateGenerator() {
                         <img src={FooterLogo} alt="Gen-Z Accountants Logo" className="footer-logo-image" />
                       </div>
 
-                      {/* footer-tex */}
                       <div className="footer-text" style={{ color: '#333' }}>
                         <p>{formatDate(currentCertificate.issueDate)}</p>
                         <div className="signature-line"></div>
-                         <p className="instructor-title">DATE</p>
-                        {/* <p className="footer-note">This certificate is valid and has been verified by Gen-Z Accountants</p> */}
+                        <p className="instructor-title">DATE</p>
                       </div>
                     </div>
                   </div>
@@ -606,20 +553,15 @@ export default function CertificateGenerator() {
                 
                 <div className="preview-actions">
                   <button onClick={downloadAsPDF} className="btn btn-download" disabled={loading}>
-                    <Download size={16} /> Download Certificate as pdf
+                    <Download size={16} /> {loading ? 'Generating PDF...' : 'Download as PDF'}
                   </button>
                   <button onClick={downloadAsImage} className="btn btn-download" disabled={loading}>
-                    <Download size={16} /> Download Certificate as image
+                    <Download size={16} /> {loading ? 'Generating Image...' : 'Download as Image'}
                   </button>
                   <button onClick={createNew} className="btn btn-secondary" disabled={loading}>
                     Create New Certificate
                   </button>
                 </div>
-                {loading && (
-                  <div className="mt-4 text-gray-600 italic">
-                    Generating download...
-                  </div>
-                )}
               </div>
             )}
           </>
