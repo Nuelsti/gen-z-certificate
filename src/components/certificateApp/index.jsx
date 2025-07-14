@@ -374,14 +374,14 @@ export default function CertificateGenerator() {
               <p className="badge-id">Certificate ID: {currentCertificate.id}</p>
             </div>
 
-            <div className="verification-actions">
+             {/* <div className="verification-actions">
               <button onClick={createNew} className="btn btn-primary">
                 Back to Main Page
               </button>
               <button onClick={() => setShowPreview(true)} className="btn btn-secondary">
                 View Certificate
               </button>
-            </div>
+            </div>  */}
           </div>
         ) : (
           <>
